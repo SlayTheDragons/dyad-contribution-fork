@@ -49,7 +49,6 @@ import { safeSend } from "../utils/safe_sender";
 import { normalizePath } from "../../../shared/normalizePath";
 import {
   getSupabaseFunctionName,
-  isServerFunction,
   isSupabaseSharedPath,
   listSupabaseFunctionNames,
 } from "@/supabase_admin/supabase_utils";

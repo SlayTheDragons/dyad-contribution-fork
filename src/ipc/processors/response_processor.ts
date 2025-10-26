@@ -14,7 +14,13 @@ import {
   deploySupabaseFunctions,
   executeSupabaseSql,
 } from "../../supabase_admin/supabase_management_client";
-import { isServerFunction } from "../../supabase_admin/supabase_utils";
+import {
+  getSupabaseFunctionName,
+  isServerFunction,
+  isSupabaseSharedPath,
+  listSupabaseFunctionNames,
+} from "../../supabase_admin/supabase_utils";
+import { bundleSupabaseFunction } from "../../supabase_admin/supabase_bundler";
 import { UserSettings } from "../../lib/schemas";
 import { gitCommit } from "../utils/git_utils";
 import { readSettings } from "@/main/settings";
@@ -30,24 +36,11 @@ import { storeDbTimestampAtCurrentVersion } from "../utils/neon_timestamp_utils"
 
 import { FileUploadsState } from "../utils/file_uploads_state";
 
-const readFile = fs.promises.readFile;
 const logger = log.scope("response_processor");
 
 interface Output {
   message: string;
   error: unknown;
-}
-
-function getFunctionNameFromPath(input: string): string {
-  return path.basename(path.extname(input) ? path.dirname(input) : input);
-}
-
-async function readFileFromFunctionPath(input: string): Promise<string> {
-  // Sometimes, the path given is a directory, sometimes it's the file itself.
-  if (path.extname(input) === "") {
-    return readFile(path.join(input, "index.ts"), "utf8");
-  }
-  return readFile(input, "utf8");
 }
 
 export async function processFullResponseActions(
@@ -108,6 +101,8 @@ export async function processFullResponseActions(
 
   const warnings: Output[] = [];
   const errors: Output[] = [];
+  const supabaseFunctionsToDeploy = new Set<string>();
+  let supabaseSharedModuleTouched = false;
 
   try {
     // Extract all tags
@@ -234,11 +229,12 @@ export async function processFullResponseActions(
       } else {
         logger.warn(`File to delete does not exist: ${fullFilePath}`);
       }
-      if (isServerFunction(filePath)) {
+      const functionName = getSupabaseFunctionName(filePath);
+      if (functionName) {
         try {
           await deleteSupabaseFunction({
             supabaseProjectId: chatWithApp.app.supabaseProjectId!,
-            functionName: getFunctionNameFromPath(filePath),
+            functionName,
           });
         } catch (error) {
           errors.push({
@@ -246,6 +242,8 @@ export async function processFullResponseActions(
             error: error,
           });
         }
+      } else if (isSupabaseSharedPath(filePath)) {
+        supabaseSharedModuleTouched = true;
       }
     }
 
@@ -283,11 +281,12 @@ export async function processFullResponseActions(
       } else {
         logger.warn(`Source file for rename does not exist: ${fromPath}`);
       }
-      if (isServerFunction(tag.from)) {
+      const fromFunctionName = getSupabaseFunctionName(tag.from);
+      if (fromFunctionName) {
         try {
           await deleteSupabaseFunction({
             supabaseProjectId: chatWithApp.app.supabaseProjectId!,
-            functionName: getFunctionNameFromPath(tag.from),
+            functionName: fromFunctionName,
           });
         } catch (error) {
           warnings.push({
@@ -295,20 +294,15 @@ export async function processFullResponseActions(
             error: error,
           });
         }
+      } else if (isSupabaseSharedPath(tag.from)) {
+        supabaseSharedModuleTouched = true;
       }
-      if (isServerFunction(tag.to)) {
-        try {
-          await deploySupabaseFunctions({
-            supabaseProjectId: chatWithApp.app.supabaseProjectId!,
-            functionName: getFunctionNameFromPath(tag.to),
-            content: await readFileFromFunctionPath(toPath),
-          });
-        } catch (error) {
-          errors.push({
-            message: `Failed to deploy Supabase function: ${tag.to} as part of renaming ${tag.from} to ${tag.to}`,
-            error: error,
-          });
-        }
+
+      const toFunctionName = getSupabaseFunctionName(tag.to);
+      if (toFunctionName) {
+        supabaseFunctionsToDeploy.add(toFunctionName);
+      } else if (isSupabaseSharedPath(tag.to)) {
+        supabaseSharedModuleTouched = true;
       }
     }
 
@@ -350,17 +344,51 @@ export async function processFullResponseActions(
       fs.writeFileSync(fullFilePath, content);
       logger.log(`Successfully wrote file: ${fullFilePath}`);
       writtenFiles.push(filePath);
-      if (isServerFunction(filePath) && typeof content === "string") {
+      if (isServerFunction(filePath)) {
+        const functionName = getSupabaseFunctionName(filePath);
+        if (functionName) {
+          supabaseFunctionsToDeploy.add(functionName);
+        }
+      } else if (isSupabaseSharedPath(filePath)) {
+        supabaseSharedModuleTouched = true;
+      }
+    }
+
+    if (supabaseSharedModuleTouched && chatWithApp.app.supabaseProjectId) {
+      try {
+        const functionNames = await listSupabaseFunctionNames(appPath);
+        for (const name of functionNames) {
+          supabaseFunctionsToDeploy.add(name);
+        }
+      } catch (error) {
+        errors.push({
+          message:
+            "Failed to enumerate Supabase functions after updating shared modules.",
+          error,
+        });
+      }
+    }
+
+    if (
+      supabaseFunctionsToDeploy.size > 0 &&
+      chatWithApp.app.supabaseProjectId
+    ) {
+      for (const functionName of supabaseFunctionsToDeploy) {
         try {
+          const bundle = await bundleSupabaseFunction({
+            appPath,
+            functionName,
+          });
+
           await deploySupabaseFunctions({
-            supabaseProjectId: chatWithApp.app.supabaseProjectId!,
-            functionName: path.basename(path.dirname(filePath)),
-            content: content,
+            supabaseProjectId: chatWithApp.app.supabaseProjectId,
+            functionName,
+            content: bundle,
           });
         } catch (error) {
           errors.push({
-            message: `Failed to deploy Supabase function: ${filePath}`,
-            error: error,
+            message: `Failed to deploy Supabase function: ${functionName}`,
+            error,
           });
         }
       }

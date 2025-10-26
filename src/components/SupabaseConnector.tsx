@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 
 import { Label } from "@/components/ui/label";
@@ -24,6 +24,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLoadApp } from "@/hooks/useLoadApp";
 import { useDeepLink } from "@/contexts/DeepLinkContext";
+import { Badge } from "@/components/ui/badge";
 
 // @ts-ignore
 import supabaseLogoLight from "../../assets/supabase/supabase-logo-wordmark--light.svg";
@@ -42,6 +43,54 @@ export function SupabaseConnector({ appId }: { appId: number }) {
   const { app, refreshApp } = useLoadApp(appId);
   const { lastDeepLink, clearLastDeepLink } = useDeepLink();
   const { isDarkMode } = useTheme();
+  const normalizedFiles = useMemo(() => {
+    const files = app?.files ?? [];
+    return files.map((filePath) => filePath.replace(/\\/g, "/"));
+  }, [app?.files]);
+  const { functionFolders, sharedModuleFiles } = useMemo(() => {
+    const SUPABASE_FUNCTIONS_PREFIX = "supabase/functions/";
+    const SUPABASE_SHARED_PREFIX = `${SUPABASE_FUNCTIONS_PREFIX}_shared/`;
+
+    const functionFolderSet = new Set<string>();
+    const sharedFiles: string[] = [];
+
+    for (const filePath of normalizedFiles) {
+      if (!filePath.startsWith(SUPABASE_FUNCTIONS_PREFIX)) {
+        continue;
+      }
+
+      if (filePath.startsWith(SUPABASE_SHARED_PREFIX)) {
+        const relativeSharedPath = filePath.slice(SUPABASE_SHARED_PREFIX.length);
+        if (relativeSharedPath) {
+          sharedFiles.push(relativeSharedPath);
+        }
+        continue;
+      }
+
+      const relativePath = filePath.slice(SUPABASE_FUNCTIONS_PREFIX.length);
+      if (!relativePath) {
+        continue;
+      }
+
+      if (!relativePath.includes("/")) {
+        continue;
+      }
+
+      const [firstSegment] = relativePath.split("/");
+      if (!firstSegment) {
+        continue;
+      }
+
+      functionFolderSet.add(firstSegment);
+    }
+
+    return {
+      functionFolders: Array.from(functionFolderSet).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+      sharedModuleFiles: sharedFiles.sort((a, b) => a.localeCompare(b)),
+    };
+  }, [normalizedFiles]);
   useEffect(() => {
     const handleDeepLink = async () => {
       if (lastDeepLink?.type === "supabase-oauth-return") {
@@ -182,6 +231,11 @@ export function SupabaseConnector({ appId }: { appId: number }) {
               <Button variant="destructive" onClick={handleUnsetProject}>
                 Disconnect Project
               </Button>
+
+              <SupabaseFunctionsOverview
+                functionFolders={functionFolders}
+                sharedModuleFiles={sharedModuleFiles}
+              />
             </div>
           </CardContent>
         </Card>
@@ -248,6 +302,10 @@ export function SupabaseConnector({ appId }: { appId: number }) {
                   )}
                 </>
               )}
+              <SupabaseFunctionsOverview
+                functionFolders={functionFolders}
+                sharedModuleFiles={sharedModuleFiles}
+              />
             </div>
           )}
         </CardContent>
@@ -278,6 +336,79 @@ export function SupabaseConnector({ appId }: { appId: number }) {
           data-testid="connect-supabase-button"
           // className="h-10"
         />
+      </div>
+    </div>
+  );
+}
+
+interface SupabaseFunctionsOverviewProps {
+  functionFolders: string[];
+  sharedModuleFiles: string[];
+}
+
+function SupabaseFunctionsOverview({
+  functionFolders,
+  sharedModuleFiles,
+}: SupabaseFunctionsOverviewProps) {
+  const hasFunctions = functionFolders.length > 0;
+  const hasSharedModules = sharedModuleFiles.length > 0;
+
+  if (!hasFunctions && !hasSharedModules) {
+    return (
+      <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+        No Supabase Edge function code yet. Create folders under
+        <code className="mx-1">supabase/functions</code> or helpers inside
+        <code className="mx-1">supabase/functions/_shared</code> to get started.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border bg-muted/40 p-3">
+      <div className="space-y-1">
+        <p className="text-sm font-medium">Supabase Edge function overview</p>
+        <p className="text-xs text-muted-foreground">
+          Files inside
+          <code className="mx-1">supabase/functions/_shared</code>
+          are bundled into every deployed function, so Dyad and you can reuse
+          helpers across all Edge functions.
+        </p>
+      </div>
+
+      {hasFunctions && (
+        <div className="space-y-1">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Function folders
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {functionFolders.map((folder) => (
+              <Badge key={folder} variant="secondary">
+                {folder}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-1">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Shared modules
+        </div>
+        {hasSharedModules ? (
+          <ul className="space-y-1 text-xs text-muted-foreground">
+            {sharedModuleFiles.map((file) => (
+              <li key={file}>
+                <code>{file}</code>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            No shared helpers yet. Add files under
+            <code className="mx-1">_shared</code> to make utilities available to
+            every function.
+          </p>
+        )}
       </div>
     </div>
   );

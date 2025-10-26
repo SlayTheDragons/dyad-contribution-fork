@@ -72,16 +72,16 @@ export function SupabaseConnector({ appId }: { appId: number }) {
         continue;
       }
 
-      if (!relativePath.includes("/")) {
-        continue;
-      }
-
       const [firstSegment] = relativePath.split("/");
       if (!firstSegment) {
         continue;
       }
 
-      functionFolderSet.add(firstSegment);
+      if (relativePath.includes("/")) {
+        functionFolderSet.add(firstSegment);
+      } else {
+        functionFolderSet.add(firstSegment.replace(/\.[^.]+$/, ""));
+      }
     }
 
     return {

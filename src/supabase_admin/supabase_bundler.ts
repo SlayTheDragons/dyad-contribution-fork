@@ -1,17 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { build } from "esbuild";
+
 const SUPABASE_FUNCTIONS_DIR = path.join("supabase", "functions");
-
-let esbuildModulePromise: Promise<typeof import("esbuild")> | undefined;
-
-async function loadEsbuild(): Promise<typeof import("esbuild")> {
-  if (!esbuildModulePromise) {
-    esbuildModulePromise = import("esbuild");
-  }
-
-  return esbuildModulePromise;
-}
 
 function normalizePath(value: string): string {
   return value.replaceAll("\\", path.sep);
@@ -44,8 +36,6 @@ export async function bundleSupabaseFunction({
       `Supabase function "${functionName}" must include an index.ts entry point. Expected file at ${entryPoint}.`,
     );
   }
-
-  const { build } = await loadEsbuild();
 
   const result = await build({
     entryPoints: [entryPoint],

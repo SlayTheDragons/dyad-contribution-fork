@@ -47,7 +47,13 @@ import { createFromTemplate } from "./createFromTemplate";
 import { gitCommit } from "../utils/git_utils";
 import { safeSend } from "../utils/safe_sender";
 import { normalizePath } from "../../../shared/normalizePath";
-import { isServerFunction } from "@/supabase_admin/supabase_utils";
+import {
+  getSupabaseFunctionName,
+  isServerFunction,
+  isSupabaseSharedPath,
+  listSupabaseFunctionNames,
+} from "@/supabase_admin/supabase_utils";
+import { bundleSupabaseFunction } from "@/supabase_admin/supabase_bundler";
 import { getVercelTeamSlug } from "../utils/vercel_utils";
 import { storeDbTimestampAtCurrentVersion } from "../utils/neon_timestamp_utils";
 import { AppSearchResult } from "@/lib/schemas";
@@ -1065,18 +1071,42 @@ export function registerAppHandlers() {
         throw new Error(`Failed to write file: ${error.message}`);
       }
 
-      if (isServerFunction(filePath) && app.supabaseProjectId) {
-        try {
-          await deploySupabaseFunctions({
-            supabaseProjectId: app.supabaseProjectId,
-            functionName: path.basename(path.dirname(filePath)),
-            content: content,
-          });
-        } catch (error) {
-          logger.error(`Error deploying Supabase function ${filePath}:`, error);
-          return {
-            warning: `File saved, but failed to deploy Supabase function: ${filePath}: ${error}`,
-          };
+      if (app.supabaseProjectId) {
+        const functionNames = new Set<string>();
+        const directFunctionName = getSupabaseFunctionName(filePath);
+
+        if (directFunctionName) {
+          functionNames.add(directFunctionName);
+        }
+
+        if (isSupabaseSharedPath(filePath)) {
+          const allFunctions = await listSupabaseFunctionNames(appPath);
+          for (const name of allFunctions) {
+            functionNames.add(name);
+          }
+        }
+
+        for (const functionName of functionNames) {
+          try {
+            const bundle = await bundleSupabaseFunction({
+              appPath,
+              functionName,
+            });
+
+            await deploySupabaseFunctions({
+              supabaseProjectId: app.supabaseProjectId,
+              functionName,
+              content: bundle,
+            });
+          } catch (error) {
+            logger.error(
+              `Error deploying Supabase function ${functionName} (triggered by ${filePath}):`,
+              error,
+            );
+            return {
+              warning: `File saved, but failed to deploy Supabase function "${functionName}": ${error}`,
+            };
+          }
         }
       }
       return {};

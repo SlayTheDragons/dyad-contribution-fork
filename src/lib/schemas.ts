@@ -216,6 +216,7 @@ export type ReleaseChannel = z.infer<typeof ReleaseChannelSchema>;
  */
 export const UserSettingsSchema = z.object({
   selectedModel: LargeLanguageModelSchema,
+  chatSuggestionModel: LargeLanguageModelSchema.optional(),
   providerSettings: z.record(z.string(), ProviderSettingSchema),
   githubUser: GithubUserSchema.optional(),
   githubAccessToken: SecretSchema.optional(),
@@ -241,6 +242,7 @@ export const UserSettingsSchema = z.object({
   acceptedCommunityCode: z.boolean().optional(),
 
   enableAutoFixProblems: z.boolean().optional(),
+  enableChatSuggestions: z.boolean().optional(),
   enableNativeGit: z.boolean().optional(),
   enableAutoUpdate: z.boolean(),
   releaseChannel: ReleaseChannelSchema,

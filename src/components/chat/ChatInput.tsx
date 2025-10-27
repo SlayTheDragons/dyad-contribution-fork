@@ -39,6 +39,7 @@ import {
   FileChange,
   SqlQuery,
 } from "@/lib/schemas";
+import type { Message } from "@/ipc/ipc_types";
 
 import { isPreviewOpenAtom } from "@/atoms/viewAtoms";
 import { useRunApp } from "@/hooks/useRunApp";
@@ -66,8 +67,19 @@ import { SelectedComponentDisplay } from "./SelectedComponentDisplay";
 import { useCheckProblems } from "@/hooks/useCheckProblems";
 import { LexicalChatInput } from "./LexicalChatInput";
 import { useChatModeToggle } from "@/hooks/useChatModeToggle";
+import { useChatSuggestions } from "@/hooks/useChatSuggestions";
 
 const showTokenBarAtom = atom(false);
+
+function getLastAssistantMessageId(messages: Message[]): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "assistant") {
+      return message.id;
+    }
+  }
+  return undefined;
+}
 
 export function ChatInput({ chatId }: { chatId?: number }) {
   const posthog = usePostHog();
@@ -111,7 +123,8 @@ export function ChatInput({ chatId }: { chatId?: number }) {
   const { proposal, messageId } = proposalResult ?? {};
   useChatModeToggle();
 
-  const lastMessage = (chatId ? (messagesById.get(chatId) ?? []) : []).at(-1);
+  const chatMessages = chatId ? messagesById.get(chatId) ?? [] : [];
+  const lastMessage = chatMessages.at(-1);
   const disableSendButton =
     lastMessage?.role === "assistant" &&
     !lastMessage.approvalState &&
@@ -238,6 +251,23 @@ export function ChatInput({ chatId }: { chatId?: number }) {
     return null; // Or loading state
   }
 
+  const suggestionModel = settings.chatSuggestionModel ?? settings.selectedModel;
+  const suggestionModelSignature = `${suggestionModel?.provider ?? ""}:${suggestionModel?.name ?? ""}:${suggestionModel?.customModelId ?? ""}`;
+  const lastAssistantMessageId = getLastAssistantMessageId(chatMessages);
+  const suggestionTriggerId = lastAssistantMessageId ?? lastMessage?.id;
+
+  const {
+    suggestions: chatSuggestions,
+    isLoading: areChatSuggestionsLoading,
+    error: chatSuggestionsError,
+  } = useChatSuggestions({
+    chatId,
+    enabled: Boolean(settings.enableChatSuggestions),
+    lastMessageId: suggestionTriggerId,
+    modelSignature: suggestionModelSignature,
+    isStreaming,
+  });
+
   return (
     <>
       {error && showError && (
@@ -285,8 +315,17 @@ export function ChatInput({ chatId }: { chatId?: number }) {
                 }
                 isApproving={isApproving}
                 isRejecting={isRejecting}
+                hideKeepGoingAction={Boolean(settings.enableChatSuggestions)}
               />
             )}
+
+          {settings.enableChatSuggestions && chatId && (
+            <ChatSuggestionsRow
+              suggestions={chatSuggestions}
+              isLoading={areChatSuggestionsLoading}
+              error={chatSuggestionsError}
+            />
+          )}
 
           <SelectedComponentDisplay />
 
@@ -367,6 +406,63 @@ export function ChatInput({ chatId }: { chatId?: number }) {
         </div>
       </div>
     </>
+  );
+}
+
+function ChatSuggestionsRow({
+  suggestions,
+  isLoading,
+  error,
+}: {
+  suggestions: string[];
+  isLoading: boolean;
+  error: string | null;
+}) {
+  const filteredSuggestions = suggestions.filter(
+    (suggestion) => suggestion.trim().toLowerCase() !== "keep going",
+  );
+
+  return (
+    <div className="border-b border-border px-2 pt-2 pb-1">
+      <div className="flex items-center space-x-2 overflow-x-auto pb-1">
+        {isLoading && (
+          <span className="text-[11px] text-muted-foreground px-1">
+            Generating suggestions…
+          </span>
+        )}
+        {filteredSuggestions.map((suggestion) => (
+          <SuggestedMessageButton key={suggestion} suggestion={suggestion} />
+        ))}
+        <KeepGoingButton />
+      </div>
+      {error && (
+        <div className="text-[11px] text-muted-foreground px-1 pb-1">
+          Suggestions unavailable: {error.slice(0, 160)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SuggestedMessageButton({ suggestion }: { suggestion: string }) {
+  const { streamMessage } = useStreamChat();
+  const chatId = useAtomValue(selectedChatIdAtom);
+
+  const onClick = useCallback(() => {
+    if (!chatId) {
+      console.error("No chat id found");
+      return;
+    }
+    streamMessage({
+      prompt: suggestion,
+      chatId,
+    });
+  }, [chatId, streamMessage, suggestion]);
+
+  return (
+    <SuggestionButton onClick={onClick} tooltipText={suggestion}>
+      <span className="max-w-[180px] truncate">{suggestion}</span>
+    </SuggestionButton>
   );
 }
 
@@ -587,11 +683,25 @@ export function mapActionToButton(action: SuggestedAction) {
   }
 }
 
-function ActionProposalActions({ proposal }: { proposal: ActionProposal }) {
+function ActionProposalActions({
+  proposal,
+  hideKeepGoing,
+}: {
+  proposal: ActionProposal;
+  hideKeepGoing?: boolean;
+}) {
+  const actions = hideKeepGoing
+    ? proposal.actions.filter((action) => action.id !== "keep-going")
+    : proposal.actions;
+
+  if (!actions.length) {
+    return null;
+  }
+
   return (
     <div className="border-b border-border p-2 pb-0 flex items-center justify-between">
       <div className="flex items-center space-x-2 overflow-x-auto pb-2">
-        {proposal.actions.map((action) => mapActionToButton(action))}
+        {actions.map((action) => mapActionToButton(action))}
       </div>
     </div>
   );
@@ -604,6 +714,7 @@ interface ChatInputActionsProps {
   isApprovable: boolean; // Can be used to enable/disable buttons
   isApproving: boolean; // State for approving
   isRejecting: boolean; // State for rejecting
+  hideKeepGoingAction?: boolean;
 }
 
 // Update ChatInputActions to accept props
@@ -614,6 +725,7 @@ function ChatInputActions({
   isApprovable,
   isApproving,
   isRejecting,
+  hideKeepGoingAction,
 }: ChatInputActionsProps) {
   const [isDetailsVisible, setIsDetailsVisible] = useState(false);
 
@@ -621,7 +733,12 @@ function ChatInputActions({
     return <div>Tip proposal</div>;
   }
   if (proposal.type === "action-proposal") {
-    return <ActionProposalActions proposal={proposal}></ActionProposalActions>;
+    return (
+      <ActionProposalActions
+        proposal={proposal}
+        hideKeepGoing={hideKeepGoingAction}
+      ></ActionProposalActions>
+    );
   }
 
   // Split files into server functions and other files - only for CodeProposal

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "../contexts/ThemeContext";
 import { ProviderSettingsGrid } from "@/components/ProviderSettings";
 import ConfirmationDialog from "@/components/ConfirmationDialog";
@@ -28,6 +28,20 @@ import { NodePathSelector } from "@/components/NodePathSelector";
 import { ToolsMcpSettings } from "@/components/settings/ToolsMcpSettings";
 import { useSetAtom } from "jotai";
 import { activeSettingsSectionAtom } from "@/atoms/viewAtoms";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useLanguageModelsByProviders } from "@/hooks/useLanguageModelsByProviders";
+import { useLanguageModelProviders } from "@/hooks/useLanguageModelProviders";
+import { isDyadProEnabled, type LargeLanguageModel, type UserSettings } from "@/lib/schemas";
+import type { LanguageModel } from "@/ipc/ipc_types";
 
 export default function SettingsPage() {
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
@@ -321,6 +335,71 @@ export function WorkflowSettings() {
   );
 }
 export function AISettings() {
+  const { settings, updateSettings } = useSettings();
+  const {
+    data: modelsByProviders,
+    isLoading: modelsLoading,
+    error: modelsError,
+  } = useLanguageModelsByProviders();
+  const { data: providerList, isLoading: providersLoading } =
+    useLanguageModelProviders();
+
+  const providerNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    providerList?.forEach((provider) => {
+      map.set(provider.id, provider.name);
+    });
+    return map;
+  }, [providerList]);
+
+  const modelGroups = useMemo(() => {
+    if (!modelsByProviders) {
+      return [] as {
+        providerId: string;
+        providerLabel: string;
+        models: LanguageModel[];
+      }[];
+    }
+    return Object.entries(modelsByProviders)
+      .map(([providerId, providerModels]) => {
+        const models = providerModels.filter((model) =>
+          shouldIncludeSuggestionModel(providerId, model, settings ?? null),
+        );
+        return {
+          providerId,
+          providerLabel: providerNameMap.get(providerId) ?? providerId,
+          models,
+        };
+      })
+      .filter((entry) => entry.models.length > 0);
+  }, [modelsByProviders, providerNameMap, settings]);
+
+  const chatModelLabel = getSuggestionModelDisplayName(
+    settings?.selectedModel ?? null,
+    modelsByProviders,
+  );
+
+  const selectedSuggestionValue = settings?.chatSuggestionModel
+    ? encodeLargeLanguageModelValue(settings.chatSuggestionModel)
+    : SUGGESTION_MODEL_DEFAULT_VALUE;
+
+  const isModelSelectDisabled =
+    modelsLoading || providersLoading || Boolean(modelsError);
+
+  const handleSuggestionModelChange = (value: string) => {
+    if (!settings) {
+      return;
+    }
+    if (value === SUGGESTION_MODEL_DEFAULT_VALUE) {
+      void updateSettings({ chatSuggestionModel: undefined });
+      return;
+    }
+    const nextModel = decodeLanguageModelValue(value);
+    if (nextModel) {
+      void updateSettings({ chatSuggestionModel: nextModel });
+    }
+  };
+
   return (
     <div
       id="ai-settings"
@@ -337,6 +416,177 @@ export function AISettings() {
       <div className="mt-4">
         <MaxChatTurnsSelector />
       </div>
+
+      <div className="mt-6 space-y-2">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <Label
+              htmlFor="enable-chat-suggestions"
+              className="text-sm font-medium text-gray-900 dark:text-white"
+            >
+              Enable chat suggestions
+            </Label>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Generate follow-up prompts using the most recent conversation turns.
+            </p>
+          </div>
+          <Switch
+            id="enable-chat-suggestions"
+            checked={!!settings?.enableChatSuggestions}
+            onCheckedChange={(checked) =>
+              updateSettings({ enableChatSuggestions: checked })
+            }
+          />
+        </div>
+
+        {settings?.enableChatSuggestions && (
+          <div className="space-y-2">
+            <Label
+              htmlFor="chat-suggestion-model"
+              className="text-sm font-medium text-gray-900 dark:text-white"
+            >
+              Suggestion model
+            </Label>
+            <Select
+              value={selectedSuggestionValue}
+              onValueChange={handleSuggestionModelChange}
+              disabled={isModelSelectDisabled}
+            >
+              <SelectTrigger
+                id="chat-suggestion-model"
+                className="w-full sm:w-72"
+                size="sm"
+              >
+                <SelectValue
+                  placeholder={
+                    modelsLoading ? "Loading models..." : "Select a model"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value={SUGGESTION_MODEL_DEFAULT_VALUE}>
+                    Match chat model ({chatModelLabel})
+                  </SelectItem>
+                </SelectGroup>
+                {modelGroups.length > 0 && <SelectSeparator />}
+                {modelGroups.map((group) => (
+                  <SelectGroup key={group.providerId}>
+                    <SelectLabel>{group.providerLabel}</SelectLabel>
+                    {group.models.map((model) => {
+                      const value = encodeLanguageModelValue(
+                        group.providerId,
+                        model,
+                      );
+                      return (
+                        <SelectItem key={value} value={value}>
+                          {model.displayName}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+            {modelsError && (
+              <p className="text-xs text-red-500">
+                Unable to load models: {modelsError.message}
+              </p>
+            )}
+            {!modelsLoading && !modelsError && modelGroups.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                Configure an LLM provider to unlock additional suggestion models.
+              </p>
+            )}
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Dyad only reviews the last few messages when creating suggestions.
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
+}
+
+const SUGGESTION_MODEL_DEFAULT_VALUE = "__chat__";
+
+function encodeLanguageModelValue(
+  providerId: string,
+  model: LanguageModel,
+): string {
+  if (model.type === "custom") {
+    return `${providerId}::${model.apiName}::${model.id}`;
+  }
+  return `${providerId}::${model.apiName}`;
+}
+
+function encodeLargeLanguageModelValue(model: LargeLanguageModel): string {
+  const customId = model.customModelId != null ? String(model.customModelId) : "";
+  return `${model.provider}::${model.name}::${customId}`;
+}
+
+function decodeLanguageModelValue(value: string): LargeLanguageModel | undefined {
+  if (value === SUGGESTION_MODEL_DEFAULT_VALUE) {
+    return undefined;
+  }
+  const [provider, name, customId] = value.split("::");
+  if (!provider || !name) {
+    return undefined;
+  }
+  const result: LargeLanguageModel = { provider, name };
+  if (customId) {
+    const parsedId = Number(customId);
+    if (!Number.isNaN(parsedId)) {
+      result.customModelId = parsedId;
+    }
+  }
+  return result;
+}
+
+function getSuggestionModelDisplayName(
+  model: LargeLanguageModel | null,
+  modelsByProviders?: Record<string, LanguageModel[]>,
+): string {
+  if (!model) {
+    return "Current chat model";
+  }
+  const providerModels = modelsByProviders?.[model.provider];
+  if (!providerModels) {
+    return model.name;
+  }
+  if (model.customModelId != null) {
+    const customModel = providerModels.find(
+      (candidate) =>
+        candidate.type === "custom" &&
+        "id" in candidate &&
+        (candidate as { id: number }).id === model.customModelId,
+    ) as (LanguageModel & { id: number }) | undefined;
+    if (customModel) {
+      return customModel.displayName;
+    }
+  }
+  const matched = providerModels.find(
+    (candidate) => candidate.apiName === model.name,
+  );
+  return matched?.displayName ?? model.name;
+}
+
+function shouldIncludeSuggestionModel(
+  providerId: string,
+  model: LanguageModel,
+  settings: UserSettings | null,
+): boolean {
+  if (!settings) {
+    return true;
+  }
+  if (providerId === "auto") {
+    const proEnabled = isDyadProEnabled(settings);
+    if (!proEnabled && ["turbo", "value"].includes(model.apiName)) {
+      return false;
+    }
+    if (proEnabled && model.apiName === "free") {
+      return false;
+    }
+  }
+  return true;
 }

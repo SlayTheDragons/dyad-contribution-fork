@@ -75,6 +75,21 @@ function ConnectedGitHubConnector({
   const [showForceDialog, setShowForceDialog] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [disconnectError, setDisconnectError] = useState<string | null>(null);
+  const [isPulling, setIsPulling] = useState(false);
+  const [pullError, setPullError] = useState<string | null>(null);
+  const [pullSuccess, setPullSuccess] = useState(false);
+  const [showPullDialog, setShowPullDialog] = useState(false);
+  const [availablePullBranches, setAvailablePullBranches] = useState<
+    GitHubBranch[]
+  >([]);
+  const [isLoadingPullBranches, setIsLoadingPullBranches] = useState(false);
+  const [selectedPullBranch, setSelectedPullBranch] = useState(
+    app.githubBranch || "main",
+  );
+  const [pullBranchInputMode, setPullBranchInputMode] = useState<
+    "select" | "custom"
+  >("select");
+  const [pullCustomBranchName, setPullCustomBranchName] = useState("");
   const autoSyncTriggeredRef = useRef(false);
 
   const handleDisconnectRepo = async () => {
@@ -122,6 +137,73 @@ function ConnectedGitHubConnector({
     },
     [appId],
   );
+
+  const loadPullBranches = useCallback(async () => {
+    if (!app.githubOrg || !app.githubRepo) {
+      return;
+    }
+    setIsLoadingPullBranches(true);
+    try {
+      const branches = await IpcClient.getInstance().getGithubRepoBranches(
+        app.githubOrg,
+        app.githubRepo,
+      );
+      setAvailablePullBranches(branches);
+      if (!branches.find((b) => b.name === selectedPullBranch)) {
+        setSelectedPullBranch(app.githubBranch || branches[0]?.name || "main");
+      }
+    } catch (error: any) {
+      setPullError(
+        error?.message || "Failed to load branches from GitHub. Try again.",
+      );
+    } finally {
+      setIsLoadingPullBranches(false);
+    }
+  }, [app.githubOrg, app.githubRepo, app.githubBranch, selectedPullBranch]);
+
+  useEffect(() => {
+    if (app.githubBranch) {
+      setSelectedPullBranch(app.githubBranch);
+    }
+  }, [app.githubBranch]);
+
+  const handleOpenPullDialog = () => {
+    setPullError(null);
+    setPullSuccess(false);
+    setPullCustomBranchName("");
+    setPullBranchInputMode("select");
+    setShowPullDialog(true);
+    void loadPullBranches();
+  };
+
+  const handlePullFromGithub = async () => {
+    const branch =
+      pullBranchInputMode === "custom"
+        ? pullCustomBranchName.trim()
+        : selectedPullBranch;
+    if (!branch) {
+      setPullError("Please choose a branch to pull from.");
+      return;
+    }
+
+    setIsPulling(true);
+    setPullError(null);
+
+    try {
+      const result = await IpcClient.getInstance().pullGithubRepo(appId, branch);
+      if (result.success) {
+        setPullSuccess(true);
+        setShowPullDialog(false);
+        refreshApp();
+      } else {
+        setPullError(result.error || "Failed to pull from GitHub.");
+      }
+    } catch (err: any) {
+      setPullError(err.message || "Failed to pull from GitHub.");
+    } finally {
+      setIsPulling(false);
+    }
+  };
 
   // Auto-sync when triggerAutoSync prop is true
   useEffect(() => {
@@ -189,6 +271,13 @@ function ConnectedGitHubConnector({
           )}
         </Button>
         <Button
+          onClick={handleOpenPullDialog}
+          disabled={isSyncing || isPulling}
+          variant="outline"
+        >
+          {isPulling ? "Preparing pull..." : "Pull from GitHub"}
+        </Button>
+        <Button
           onClick={handleDisconnectRepo}
           disabled={isDisconnecting}
           variant="outline"
@@ -231,8 +320,16 @@ function ConnectedGitHubConnector({
       {syncSuccess && (
         <p className="text-green-600 mt-2">Successfully pushed to GitHub!</p>
       )}
+      {pullSuccess && (
+        <p className="text-green-600 mt-2">
+          Successfully pulled the latest changes from GitHub!
+        </p>
+      )}
       {disconnectError && (
         <p className="text-red-600 mt-2">{disconnectError}</p>
+      )}
+      {pullError && !showPullDialog && (
+        <p className="text-red-600 mt-2">{pullError}</p>
       )}
 
       {/* Force Push Warning Dialog */}
@@ -279,6 +376,114 @@ function ConnectedGitHubConnector({
               disabled={isSyncing}
             >
               {isSyncing ? "Force Pushing..." : "Force Push"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Pull Warning Dialog */}
+      <Dialog
+        open={showPullDialog}
+        onOpenChange={(open) => {
+          setShowPullDialog(open);
+          if (!open) {
+            setIsPulling(false);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Github className="h-5 w-5" />
+              Pull from GitHub
+            </DialogTitle>
+            <DialogDescription>
+              <div className="space-y-3">
+                <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 p-3 rounded-md flex gap-3">
+                  <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-400 mt-0.5" />
+                  <div className="space-y-1 text-sm text-yellow-700 dark:text-yellow-200">
+                    <p>
+                      Pulling updates will overwrite files in this Dyad project
+                      with code from GitHub. Only pull from branches and
+                      collaborators you trust.
+                    </p>
+                    <p>
+                      Malicious updates can introduce unsafe scripts or
+                      configuration changes that run on your machine when the
+                      project is built or executed.
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Select branch to pull</Label>
+                  {pullBranchInputMode === "select" ? (
+                    <Select
+                      value={selectedPullBranch}
+                      onValueChange={(value) => {
+                        setSelectedPullBranch(value);
+                        setPullError(null);
+                      }}
+                      disabled={isLoadingPullBranches}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Choose a branch" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availablePullBranches.map((branchOption) => (
+                          <SelectItem key={branchOption.name} value={branchOption.name}>
+                            {branchOption.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      value={pullCustomBranchName}
+                      onChange={(e) => {
+                        setPullCustomBranchName(e.target.value);
+                        setPullError(null);
+                      }}
+                      placeholder="Enter branch name"
+                    />
+                  )}
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="px-0"
+                    onClick={() => {
+                      setPullBranchInputMode((mode) =>
+                        mode === "select" ? "custom" : "select",
+                      );
+                      setPullError(null);
+                    }}
+                  >
+                    {pullBranchInputMode === "select"
+                      ? "Use a custom branch name"
+                      : "Choose from available branches"}
+                  </Button>
+                  {isLoadingPullBranches && (
+                    <p className="text-sm text-muted-foreground">
+                      Loading branches from GitHub...
+                    </p>
+                  )}
+                  {pullError && (
+                    <p className="text-sm text-red-600">{pullError}</p>
+                  )}
+                </div>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowPullDialog(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handlePullFromGithub} disabled={isPulling}>
+              {isPulling ? "Pulling..." : "Pull latest"}
             </Button>
           </DialogFooter>
         </DialogContent>

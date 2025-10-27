@@ -604,6 +604,132 @@ async function handlePushToGithub(
   }
 }
 
+async function handlePullFromGithub(
+  event: IpcMainInvokeEvent,
+  { appId, branch }: { appId: number; branch?: string },
+) {
+  try {
+    const settings = readSettings();
+    const accessToken = settings.githubAccessToken?.value;
+    if (!accessToken) {
+      return { success: false, error: "Not authenticated with GitHub." };
+    }
+
+    const app = await db.query.apps.findFirst({ where: eq(apps.id, appId) });
+    if (!app || !app.githubOrg || !app.githubRepo) {
+      return { success: false, error: "App is not linked to a GitHub repo." };
+    }
+
+    const targetBranch = (branch && branch.trim()) || app.githubBranch || "main";
+    const appPath = getDyadAppPath(app.path);
+
+    const statusMatrix = await git.statusMatrix({ fs, dir: appPath });
+    const hasUncommittedChanges = statusMatrix.some((row) => {
+      const [, headStatus, workdirStatus, stageStatus] = row;
+      return headStatus !== workdirStatus || workdirStatus !== stageStatus;
+    });
+
+    if (hasUncommittedChanges) {
+      return {
+        success: false,
+        error:
+          "You have local changes that haven't been committed. Please commit or discard them before pulling.",
+      };
+    }
+
+    const remoteUrl = IS_TEST_BUILD
+      ? `${GITHUB_GIT_BASE}/${app.githubOrg}/${app.githubRepo}.git`
+      : `https://${accessToken}:x-oauth-basic@github.com/${app.githubOrg}/${app.githubRepo}.git`;
+
+    await git.setConfig({
+      fs,
+      dir: appPath,
+      path: "remote.origin.url",
+      value: remoteUrl,
+    });
+
+    const fetchSpec = "+refs/heads/*:refs/remotes/origin/*";
+    let existingFetchSpec: string | undefined;
+    try {
+      existingFetchSpec = await git.getConfig({
+        fs,
+        dir: appPath,
+        path: "remote.origin.fetch",
+      });
+    } catch (error) {
+      existingFetchSpec = undefined;
+    }
+
+    if (existingFetchSpec !== fetchSpec) {
+      await git.setConfig({
+        fs,
+        dir: appPath,
+        path: "remote.origin.fetch",
+        value: fetchSpec,
+      });
+    }
+
+    await git.fetch({
+      fs,
+      http,
+      dir: appPath,
+      remote: "origin",
+      ref: targetBranch,
+      singleBranch: true,
+      onAuth: () => ({
+        username: accessToken,
+        password: "x-oauth-basic",
+      }),
+    });
+
+    const localBranches = await git.listBranches({ fs, dir: appPath });
+    if (!localBranches.includes(targetBranch)) {
+      await git.checkout({
+        fs,
+        dir: appPath,
+        ref: targetBranch,
+        remote: "origin",
+        track: true,
+      });
+    } else {
+      await git.checkout({
+        fs,
+        dir: appPath,
+        ref: targetBranch,
+      });
+    }
+
+    await git.pull({
+      fs,
+      http,
+      dir: appPath,
+      remote: "origin",
+      ref: targetBranch,
+      singleBranch: true,
+      fastForwardOnly: true,
+      onAuth: () => ({
+        username: accessToken,
+        password: "x-oauth-basic",
+      }),
+    });
+
+    await updateAppGithubRepo({
+      appId,
+      org: app.githubOrg,
+      repo: app.githubRepo,
+      branch: targetBranch,
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    logger.error("[GitHub Handler] Failed to pull from GitHub:", err);
+    return {
+      success: false,
+      error: err.message || "Failed to pull from GitHub.",
+    };
+  }
+}
+
 async function handleDisconnectGithubRepo(
   event: IpcMainInvokeEvent,
   { appId }: { appId: number },
@@ -758,6 +884,7 @@ export function registerGithubHandlers() {
     ) => handleConnectToExistingRepo(event, args),
   );
   ipcMain.handle("github:push", handlePushToGithub);
+  ipcMain.handle("github:pull", handlePullFromGithub);
   ipcMain.handle("github:disconnect", (event, args: { appId: number }) =>
     handleDisconnectGithubRepo(event, args),
   );

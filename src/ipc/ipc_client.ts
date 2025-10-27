@@ -793,6 +793,16 @@ export class IpcClient {
     });
   }
 
+  public async pullGithubRepo(
+    appId: number,
+    branch: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.ipcRenderer.invoke("github:pull", {
+      appId,
+      branch,
+    });
+  }
+
   public async disconnectGithubRepo(appId: number): Promise<void> {
     await this.ipcRenderer.invoke("github:disconnect", {
       appId,

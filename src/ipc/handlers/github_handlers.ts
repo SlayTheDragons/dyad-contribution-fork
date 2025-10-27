@@ -648,27 +648,6 @@ async function handlePullFromGithub(
       value: remoteUrl,
     });
 
-    const fetchSpec = "+refs/heads/*:refs/remotes/origin/*";
-    let existingFetchSpec: string | undefined;
-    try {
-      existingFetchSpec = await git.getConfig({
-        fs,
-        dir: appPath,
-        path: "remote.origin.fetch",
-      });
-    } catch (error) {
-      existingFetchSpec = undefined;
-    }
-
-    if (existingFetchSpec !== fetchSpec) {
-      await git.setConfig({
-        fs,
-        dir: appPath,
-        path: "remote.origin.fetch",
-        value: fetchSpec,
-      });
-    }
-
     await git.fetch({
       fs,
       http,

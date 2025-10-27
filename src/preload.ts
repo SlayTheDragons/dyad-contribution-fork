@@ -59,6 +59,7 @@ const validInvokeChannels = [
   "github:create-repo",
   "github:connect-existing-repo",
   "github:push",
+  "github:pull",
   "github:disconnect",
   "neon:create-project",
   "neon:get-project",

@@ -2,4 +2,5 @@
 - text: testuser/test-new-repo
 - paragraph: "Branch: main"
 - button "Sync to GitHub"
+- button "Pull from GitHub"
 - button "Disconnect from repo"

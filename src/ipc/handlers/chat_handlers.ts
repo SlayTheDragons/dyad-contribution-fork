@@ -6,13 +6,30 @@ import type { ChatSearchResult, ChatSummary } from "../../lib/schemas";
 import * as git from "isomorphic-git";
 import * as fs from "fs";
 import { createLoggedHandler } from "./safe_handle";
+import {
+  CHAT_SUGGESTION_HISTORY_LIMIT,
+  CHAT_SUGGESTION_MESSAGE_SNIPPET,
+  formatChatHistoryForSuggestions,
+  sanitizeChatSuggestions,
+} from "./chat_suggestions";
 
 import log from "electron-log";
 import { getDyadAppPath } from "../../paths/paths";
 import { UpdateChatParams } from "../ipc_types";
+import { readSettings } from "../../main/settings";
+import { generateObject } from "ai";
+import { z } from "zod";
+import { getModelClient } from "../utils/get_model_client";
 
 const logger = log.scope("chat_handlers");
 const handle = createLoggedHandler(logger);
+
+const ChatSuggestionSchema = z.object({
+  suggestions: z
+    .array(z.string().min(1).max(160))
+    .min(1)
+    .max(3),
+});
 
 export function registerChatHandlers() {
   handle("create-chat", async (_, appId: number): Promise<number> => {
@@ -115,6 +132,50 @@ export function registerChatHandlers() {
   handle("delete-messages", async (_, chatId: number): Promise<void> => {
     await db.delete(messages).where(eq(messages.chatId, chatId));
   });
+
+  handle(
+    "chat:get-suggestions",
+    async (_event, { chatId }: { chatId: number }): Promise<string[]> => {
+      try {
+        const settings = readSettings();
+        if (!settings.enableChatSuggestions) {
+          return [];
+        }
+
+        const suggestionModel = settings.chatSuggestionModel ?? settings.selectedModel;
+        if (!suggestionModel) {
+          return [];
+        }
+
+        const history = await db
+          .select({ role: messages.role, content: messages.content })
+          .from(messages)
+          .where(eq(messages.chatId, chatId))
+          .orderBy(desc(messages.createdAt))
+          .limit(CHAT_SUGGESTION_HISTORY_LIMIT);
+
+        const orderedHistory = history.reverse();
+        const conversation = formatChatHistoryForSuggestions(orderedHistory);
+
+        const { modelClient } = await getModelClient(suggestionModel, settings);
+        const result = await generateObject({
+          model: modelClient.model,
+          schema: ChatSuggestionSchema,
+          system:
+            "You are a coding copilot suggesting concise follow-up prompts. Offer up to three actionable ideas that help progress the project. Keep each suggestion under 120 characters and avoid repeating earlier instructions.",
+          prompt: `Conversation so far:\n${conversation || "No prior messages."}\n\nSuggest up to three distinct next messages the user could send.`,
+          maxRetries: 1,
+        });
+
+        const suggestions = sanitizeChatSuggestions(result.object.suggestions);
+
+        return suggestions.slice(0, 3);
+      } catch (error) {
+        logger.error(`Error generating chat suggestions for chat ${chatId}:`, error);
+        return [];
+      }
+    },
+  );
 
   handle(
     "search-chats",

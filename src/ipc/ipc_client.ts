@@ -499,6 +499,21 @@ export class IpcClient {
     await this.ipcRenderer.invoke("delete-messages", chatId);
   }
 
+  public async getChatSuggestions({
+    chatId,
+  }: {
+    chatId: number;
+  }): Promise<string[]> {
+    try {
+      return await this.ipcRenderer.invoke("chat:get-suggestions", {
+        chatId,
+      });
+    } catch (error) {
+      console.error("Failed to load chat suggestions", error);
+      throw error;
+    }
+  }
+
   // Open an external URL using the default browser
   public async openExternalUrl(url: string): Promise<void> {
     await this.ipcRenderer.invoke("open-external-url", url);

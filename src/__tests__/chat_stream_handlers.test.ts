@@ -16,6 +16,7 @@ import fs from "node:fs";
 import git from "isomorphic-git";
 import { db } from "../db";
 import { cleanFullResponse } from "@/ipc/utils/cleanFullResponse";
+import { serveSupabaseFunction } from "@/supabase_admin/supabase_management_client";
 
 // Mock fs with default export
 vi.mock("node:fs", async () => {
@@ -78,6 +79,12 @@ vi.mock("../db", () => ({
       })),
     })),
   },
+}));
+
+vi.mock("@/supabase_admin/supabase_management_client", () => ({
+  executeSupabaseSql: vi.fn().mockResolvedValue(undefined),
+  deleteSupabaseFunction: vi.fn().mockResolvedValue(undefined),
+  serveSupabaseFunction: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe("getDyadAddDependencyTags", () => {
@@ -710,6 +717,86 @@ describe("processFullResponse", () => {
     );
     expect(git.commit).toHaveBeenCalled();
     expect(result).toEqual({ updatedFiles: true });
+  });
+
+  it("does not serve Supabase functions during auto-approval", async () => {
+    vi.mocked(fs.mkdirSync).mockImplementation(() => undefined);
+    vi.mocked(fs.writeFileSync).mockImplementation(() => undefined);
+
+    vi.mocked(db.query.chats.findFirst).mockResolvedValue({
+      id: 1,
+      appId: 1,
+      title: "Test Chat",
+      createdAt: new Date(),
+      app: {
+        id: 1,
+        name: "Mock App",
+        path: "mock-app-path",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        supabaseProjectId: "project-ref",
+      },
+      messages: [],
+    } as any);
+
+    const supabaseServeMock = vi.mocked(serveSupabaseFunction);
+    supabaseServeMock.mockClear();
+
+    const response = `<dyad-write path="supabase/functions/demo-utils/index.ts">export const handler = () => {};</dyad-write>`;
+
+    await processFullResponseActions(response, 1, {
+      chatSummary: undefined,
+      messageId: 1,
+    });
+
+    expect(supabaseServeMock).not.toHaveBeenCalled();
+  });
+
+  it("serves Supabase functions after explicit approval", async () => {
+    vi.mocked(fs.mkdirSync).mockImplementation(() => undefined);
+    vi.mocked(fs.writeFileSync).mockImplementation(() => undefined);
+
+    vi.mocked(db.query.chats.findFirst).mockResolvedValue({
+      id: 1,
+      appId: 1,
+      title: "Test Chat",
+      createdAt: new Date(),
+      app: {
+        id: 1,
+        name: "Mock App",
+        path: "mock-app-path",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        supabaseProjectId: "project-ref",
+      },
+      messages: [],
+    } as any);
+
+    const supabaseServeMock = vi.mocked(serveSupabaseFunction);
+    supabaseServeMock.mockClear();
+
+    vi.mocked(db.query.messages.findFirst).mockResolvedValue({
+      id: 1,
+      chatId: 1,
+      role: "assistant",
+      content: "some content",
+      createdAt: new Date(),
+      approvalState: null,
+      commitHash: null,
+    } as any);
+
+    const response = `<dyad-write path="supabase/functions/demo-utils/index.ts">export const handler = () => {};</dyad-write>`;
+
+    await processFullResponseActions(response, 1, {
+      chatSummary: undefined,
+      messageId: 1,
+      triggeredByUserApproval: true,
+    });
+
+    expect(supabaseServeMock).toHaveBeenCalledWith({
+      appPath: "/mock/user/data/path/mock-app-path",
+      functionName: "demo-utils",
+    });
   });
 
   it("should handle file system errors gracefully", async () => {

@@ -366,6 +366,7 @@ const approveProposalHandler = async (
     {
       chatSummary: chatSummary ?? undefined,
       messageId,
+      triggeredByUserApproval: true,
     }, // Pass summary if found
   );
 

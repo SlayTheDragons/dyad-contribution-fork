@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("@/ipc/utils/simpleSpawn", () => ({
   simpleSpawn: vi.fn().mockResolvedValue(undefined),
@@ -24,9 +24,21 @@ vi.mock("@dyad-sh/supabase-management-js", () => ({
 }));
 
 import { simpleSpawn } from "@/ipc/utils/simpleSpawn";
-import { deploySupabaseFunctions } from "@/supabase_admin/supabase_management_client";
+import {
+  deploySupabaseFunctions,
+  serveSupabaseFunction,
+} from "@/supabase_admin/supabase_management_client";
 
 const simpleSpawnMock = vi.mocked(simpleSpawn);
+
+beforeEach(() => {
+  simpleSpawnMock.mockClear();
+  process.env.SUPABASE_CLI_PATH = "supabase";
+});
+
+afterEach(() => {
+  delete process.env.SUPABASE_CLI_PATH;
+});
 
 describe("deploySupabaseFunctions", () => {
   it("invokes the Supabase CLI with the project ref and access token", async () => {
@@ -45,5 +57,29 @@ describe("deploySupabaseFunctions", () => {
     expect(callArgs?.cwd).toBe("/path/to/app");
     expect(callArgs?.env?.SUPABASE_ACCESS_TOKEN).toBe("test-token");
     expect(callArgs?.successMessage).toContain("hello-world");
+  });
+});
+
+describe("serveSupabaseFunction", () => {
+  it("runs supabase serve using the configured CLI path", async () => {
+    process.env.SUPABASE_CLI_PATH = "echo";
+
+    await expect(
+      serveSupabaseFunction({
+        functionName: "hello-world",
+        appPath: process.cwd(),
+      }),
+    ).resolves.not.toThrow();
+  });
+
+  it("rejects when the CLI exits with a failure code", async () => {
+    process.env.SUPABASE_CLI_PATH = "false";
+
+    await expect(
+      serveSupabaseFunction({
+        functionName: "bad-func",
+        appPath: process.cwd(),
+      }),
+    ).rejects.toThrow(/Failed to serve Supabase function bad-func/);
   });
 });

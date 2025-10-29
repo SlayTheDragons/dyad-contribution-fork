@@ -36,8 +36,8 @@ import killPort from "kill-port";
 import util from "util";
 import log from "electron-log";
 import {
-  deploySupabaseFunctions,
   getSupabaseProjectName,
+  serveSupabaseFunction,
 } from "../../supabase_admin/supabase_management_client";
 import { createLoggedHandler } from "./safe_handle";
 import { getLanguageModelProviders } from "../shared/language_model_helpers";
@@ -1086,18 +1086,17 @@ export function registerAppHandlers() {
 
         for (const functionName of functionNames) {
           try {
-            await deploySupabaseFunctions({
+            await serveSupabaseFunction({
               appPath,
-              supabaseProjectId: app.supabaseProjectId,
               functionName,
             });
           } catch (error) {
             logger.error(
-              `Error deploying Supabase function ${functionName} (triggered by ${filePath}):`,
+              `Error serving Supabase function ${functionName} (triggered by ${filePath}):`,
               error,
             );
             return {
-              warning: `File saved, but failed to deploy Supabase function "${functionName}": ${error}`,
+              warning: `File saved, but failed to serve Supabase function "${functionName}": ${error}`,
             };
           }
         }

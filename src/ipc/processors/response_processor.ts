@@ -11,8 +11,8 @@ import log from "electron-log";
 import { executeAddDependency } from "./executeAddDependency";
 import {
   deleteSupabaseFunction,
-  deploySupabaseFunctions,
   executeSupabaseSql,
+  serveSupabaseFunction,
 } from "../../supabase_admin/supabase_management_client";
 import {
   getSupabaseFunctionName,
@@ -125,6 +125,8 @@ export async function processFullResponseActions(
       logger.error(`No message found for ID: ${messageId}`);
       return {};
     }
+
+    const wasAlreadyApproved = message.approvalState === "approved";
 
     // Handle SQL execution tags
     if (dyadExecuteSqlQueries.length > 0) {
@@ -369,19 +371,21 @@ export async function processFullResponseActions(
     }
 
     if (
+      !wasAlreadyApproved &&
       supabaseFunctionsToDeploy.size > 0 &&
       chatWithApp.app.supabaseProjectId
     ) {
+      // Align serving with the approval flow so we only run Supabase when the
+      // message transitions into an approved state.
       for (const functionName of supabaseFunctionsToDeploy) {
         try {
-          await deploySupabaseFunctions({
+          await serveSupabaseFunction({
             appPath,
-            supabaseProjectId: chatWithApp.app.supabaseProjectId,
             functionName,
           });
         } catch (error) {
           errors.push({
-            message: `Failed to deploy Supabase function: ${functionName}`,
+            message: `Failed to serve Supabase function: ${functionName}`,
             error,
           });
         }

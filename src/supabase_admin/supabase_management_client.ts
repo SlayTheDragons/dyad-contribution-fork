@@ -1,3 +1,7 @@
+import { spawn, exec } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
+import fs from "node:fs";
 import { withLock } from "../ipc/utils/lock_utils";
 import { readSettings, writeSettings } from "../main/settings";
 import { simpleSpawn } from "../ipc/utils/simpleSpawn";
@@ -9,6 +13,204 @@ import log from "electron-log";
 import { IS_TEST_BUILD } from "../ipc/utils/test_utils";
 
 const logger = log.scope("supabase_management_client");
+const execPromise = promisify(exec);
+
+const SUPABASE_CLI_POLL_INTERVAL_MS = 1_000;
+const SUPABASE_CLI_MAX_ATTEMPTS = 5;
+const SUPABASE_SERVE_RUN_DURATION_MS = 10_000;
+const SUPABASE_SERVE_FORCE_KILL_DELAY_MS = 4_000;
+
+type SupabaseCliLocation = {
+  command: string;
+  rawPath: string;
+  source: "env" | "local" | "global";
+};
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function quoteCommand(command: string): string {
+  if (command.includes("\"")) {
+    command = command.replace(/"/g, '\\"');
+  }
+  if (/(\s)/.test(command)) {
+    return `"${command}"`;
+  }
+  return command;
+}
+
+function getLocalSupabaseCli(appPath: string): SupabaseCliLocation | undefined {
+  const binName = process.platform === "win32" ? "supabase.cmd" : "supabase";
+  const localPath = path.join(appPath, "node_modules", ".bin", binName);
+
+  if (fs.existsSync(localPath)) {
+    return {
+      command: quoteCommand(localPath),
+      rawPath: localPath,
+      source: "local",
+    };
+  }
+
+  if (process.platform === "win32") {
+    const exePath = path.join(appPath, "node_modules", ".bin", "supabase.exe");
+    if (fs.existsSync(exePath)) {
+      return {
+        command: quoteCommand(exePath),
+        rawPath: exePath,
+        source: "local",
+      };
+    }
+  }
+
+  return undefined;
+}
+
+async function getGlobalSupabaseCli(): Promise<SupabaseCliLocation | undefined> {
+  const lookupCommand = process.platform === "win32" ? "where supabase" : "which supabase";
+
+  try {
+    const { stdout } = await execPromise(lookupCommand, { windowsHide: true });
+    const candidate = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
+
+    if (candidate) {
+      return {
+        command: quoteCommand(candidate),
+        rawPath: candidate,
+        source: "global",
+      };
+    }
+  } catch (error) {
+    logger.debug(
+      `Global Supabase CLI lookup failed using command "${lookupCommand}": ${String(
+        error,
+      )}`,
+    );
+  }
+
+  return undefined;
+}
+
+async function waitForSupabaseCli(appPath: string): Promise<SupabaseCliLocation> {
+  const envOverride = process.env.SUPABASE_CLI_PATH?.trim();
+  if (envOverride) {
+    logger.info(
+      `Using Supabase CLI path from SUPABASE_CLI_PATH environment variable: ${envOverride}`,
+    );
+    return {
+      command: quoteCommand(envOverride),
+      rawPath: envOverride,
+      source: "env",
+    };
+  }
+
+  let loggedWaiting = false;
+
+  for (let attempt = 1; attempt <= SUPABASE_CLI_MAX_ATTEMPTS; attempt += 1) {
+    const location = getLocalSupabaseCli(appPath) ?? (await getGlobalSupabaseCli());
+    if (location) {
+      logger.info(
+        `Supabase CLI detected (${location.source}) at ${location.rawPath}`,
+      );
+      return location;
+    }
+
+    if (!loggedWaiting) {
+      logger.info(
+        "Supabase CLI not found yet. Waiting for installation to complete before running commands...",
+      );
+      loggedWaiting = true;
+    }
+
+    if (attempt < SUPABASE_CLI_MAX_ATTEMPTS) {
+      await sleep(SUPABASE_CLI_POLL_INTERVAL_MS);
+    }
+  }
+
+  throw new Error(
+    "Supabase CLI not found after multiple checks. Install it with `pnpm add -D supabase` or `npm install --save-dev supabase` before running Supabase functions.",
+  );
+}
+
+async function runSupabaseServeCommand({
+  command,
+  cwd,
+  successMessage,
+  errorPrefix,
+}: {
+  command: string;
+  cwd: string;
+  successMessage: string;
+  errorPrefix: string;
+}): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    logger.info(`Running: ${command}`);
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      stdio: "pipe",
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout?.on("data", (data) => {
+      const output = data.toString();
+      stdout += output;
+      logger.info(output);
+    });
+
+    child.stderr?.on("data", (data) => {
+      const output = data.toString();
+      stderr += output;
+      logger.error(output);
+    });
+
+    const gracefulTimeout = setTimeout(() => {
+      if (!child.killed) {
+        logger.info(
+          `Stopping Supabase serve command after ${SUPABASE_SERVE_RUN_DURATION_MS}ms`,
+        );
+        child.kill();
+      }
+    }, SUPABASE_SERVE_RUN_DURATION_MS);
+
+    const forceTimeout = setTimeout(() => {
+      if (!child.killed) {
+        logger.warn("Supabase serve process did not terminate gracefully; forcing exit.");
+        child.kill("SIGKILL");
+      }
+    }, SUPABASE_SERVE_RUN_DURATION_MS + SUPABASE_SERVE_FORCE_KILL_DELAY_MS);
+
+    const cleanup = () => {
+      clearTimeout(gracefulTimeout);
+      clearTimeout(forceTimeout);
+    };
+
+    child.on("error", (err) => {
+      cleanup();
+      const errorMessage = `${errorPrefix}: ${err.message}\n\nSTDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`;
+      reject(new Error(errorMessage));
+    });
+
+    child.on("close", (code, signal) => {
+      cleanup();
+      if (code === 0 || signal === "SIGTERM" || signal === "SIGINT") {
+        logger.info(successMessage);
+        resolve();
+        return;
+      }
+
+      const exitDetails =
+        code !== null ? `exit code ${code}` : signal ? `signal ${signal}` : "unknown exit";
+      const errorMessage = `${errorPrefix} (${exitDetails})\n\nSTDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`;
+      reject(new Error(errorMessage));
+    });
+  });
+}
 
 /**
  * Checks if the Supabase access token is expired or about to expire
@@ -248,6 +450,8 @@ export async function deploySupabaseFunctions({
     return;
   }
 
+  const cli = await waitForSupabaseCli(appPath);
+
   const env: Record<string, string> = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -256,11 +460,35 @@ export async function deploySupabaseFunctions({
   env.SUPABASE_ACCESS_TOKEN = accessToken;
 
   await simpleSpawn({
-    command: `supabase functions deploy ${functionName} --project-ref ${supabaseProjectId} --no-verify-jwt`,
+    command: `${cli.command} functions deploy ${functionName} --project-ref ${supabaseProjectId} --no-verify-jwt`,
     cwd: appPath,
     successMessage: `Deployed Supabase function ${functionName} via Supabase CLI`,
     errorPrefix: `Failed to deploy Supabase function ${functionName}`,
     env,
+  });
+}
+
+export async function serveSupabaseFunction({
+  functionName,
+  appPath,
+}: {
+  functionName: string;
+  appPath: string;
+}): Promise<void> {
+  logger.info(`Serving Supabase function locally: ${functionName}`);
+
+  if (IS_TEST_BUILD) {
+    logger.info("Test build: skipping Supabase CLI serve");
+    return;
+  }
+
+  const cli = await waitForSupabaseCli(appPath);
+
+  await runSupabaseServeCommand({
+    command: `${cli.command} functions serve ${functionName} --no-verify-jwt`,
+    cwd: appPath,
+    successMessage: `Served Supabase function ${functionName} locally via Supabase CLI`,
+    errorPrefix: `Failed to serve Supabase function ${functionName}`,
   });
 }
 

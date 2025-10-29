@@ -11,8 +11,8 @@ import log from "electron-log";
 import { executeAddDependency } from "./executeAddDependency";
 import {
   deleteSupabaseFunction,
-  deploySupabaseFunctions,
   executeSupabaseSql,
+  serveSupabaseFunction,
 } from "../../supabase_admin/supabase_management_client";
 import {
   getSupabaseFunctionName,
@@ -374,14 +374,13 @@ export async function processFullResponseActions(
     ) {
       for (const functionName of supabaseFunctionsToDeploy) {
         try {
-          await deploySupabaseFunctions({
+          await serveSupabaseFunction({
             appPath,
-            supabaseProjectId: chatWithApp.app.supabaseProjectId,
             functionName,
           });
         } catch (error) {
           errors.push({
-            message: `Failed to deploy Supabase function: ${functionName}`,
+            message: `Failed to serve Supabase function: ${functionName}`,
             error,
           });
         }

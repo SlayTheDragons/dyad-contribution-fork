@@ -20,7 +20,6 @@ import {
   isSupabaseSharedPath,
   listSupabaseFunctionNames,
 } from "../../supabase_admin/supabase_utils";
-import { bundleSupabaseFunction } from "../../supabase_admin/supabase_bundler";
 import { UserSettings } from "../../lib/schemas";
 import { gitCommit } from "../utils/git_utils";
 import { readSettings } from "@/main/settings";
@@ -375,15 +374,10 @@ export async function processFullResponseActions(
     ) {
       for (const functionName of supabaseFunctionsToDeploy) {
         try {
-          const bundle = await bundleSupabaseFunction({
-            appPath,
-            functionName,
-          });
-
           await deploySupabaseFunctions({
+            appPath,
             supabaseProjectId: chatWithApp.app.supabaseProjectId,
             functionName,
-            content: bundle,
           });
         } catch (error) {
           errors.push({

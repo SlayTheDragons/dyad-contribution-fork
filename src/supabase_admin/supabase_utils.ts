@@ -3,7 +3,7 @@ import path from "node:path";
 
 const SUPABASE_FUNCTIONS_DIR = path.join("supabase", "functions");
 const SUPABASE_FUNCTIONS_PREFIX = "supabase/functions/";
-const SUPABASE_SHARED_DIRECTORY = "_shared";
+const SUPABASE_SHARED_DIRECTORY = "shared";
 const SUPABASE_SHARED_PREFIX =
   SUPABASE_FUNCTIONS_PREFIX + SUPABASE_SHARED_DIRECTORY + "/";
 

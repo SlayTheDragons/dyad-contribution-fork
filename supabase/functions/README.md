@@ -4,10 +4,10 @@ This directory contains all Supabase Edge Functions for the project. Each functi
 
 ## Shared helpers
 
-Reusable utilities that need to be shared across multiple functions belong in the pre-created [`_shared/`](./_shared) folder. Import them from any edge function using a relative path such as:
+Reusable utilities that need to be shared across multiple functions belong in the pre-created [`shared/`](./shared) folder. Import them from any edge function using a relative path such as:
 
 ```ts
-import { handler } from "../_shared/handler";
+import { handler } from "../shared/handler";
 ```
 
-The Dyad app automatically detects updates to files within `_shared/` and redeploys every function so that the shared changes take effect everywhere.
+The Dyad app automatically detects updates to files within `shared/` and redeploys every function so that the shared changes take effect everywhere.

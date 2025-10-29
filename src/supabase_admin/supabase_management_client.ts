@@ -1,5 +1,6 @@
 import { withLock } from "../ipc/utils/lock_utils";
 import { readSettings, writeSettings } from "../main/settings";
+import { simpleSpawn } from "../ipc/utils/simpleSpawn";
 import {
   SupabaseManagementAPI,
   SupabaseManagementAPIError,
@@ -226,47 +227,41 @@ export async function listSupabaseBranches({
 export async function deploySupabaseFunctions({
   supabaseProjectId,
   functionName,
-  content,
+  appPath,
 }: {
   supabaseProjectId: string;
   functionName: string;
-  content: string;
+  appPath: string;
 }): Promise<void> {
   logger.info(
     `Deploying Supabase function: ${functionName} to project: ${supabaseProjectId}`,
   );
   const supabase = await getSupabaseClient();
-  const formData = new FormData();
-  formData.append(
-    "metadata",
-    JSON.stringify({
-      entrypoint_path: "index.ts",
-      name: functionName,
-      // See: https://github.com/dyad-sh/dyad/issues/1010
-      verify_jwt: false,
-    }),
-  );
-  formData.append("file", new Blob([content]), "index.ts");
+  const accessToken = (supabase as any).options?.accessToken as string | undefined;
 
-  const response = await fetch(
-    `https://api.supabase.com/v1/projects/${supabaseProjectId}/functions/deploy?slug=${functionName}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${(supabase as any).options.accessToken}`,
-      },
-      body: formData,
-    },
-  );
-
-  if (response.status !== 201) {
-    throw await createResponseError(response, "create function");
+  if (!accessToken) {
+    throw new Error("Missing Supabase access token for deployment");
   }
 
-  logger.info(
-    `Deployed Supabase function: ${functionName} to project: ${supabaseProjectId}`,
+  if (IS_TEST_BUILD) {
+    logger.info("Test build: skipping Supabase CLI deployment");
+    return;
+  }
+
+  const env: Record<string, string> = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
   );
-  return response.json();
+  env.SUPABASE_ACCESS_TOKEN = accessToken;
+
+  await simpleSpawn({
+    command: `supabase functions deploy ${functionName} --project-ref ${supabaseProjectId} --no-verify-jwt`,
+    cwd: appPath,
+    successMessage: `Deployed Supabase function ${functionName} via Supabase CLI`,
+    errorPrefix: `Failed to deploy Supabase function ${functionName}`,
+    env,
+  });
 }
 
 async function createResponseError(response: Response, action: string) {

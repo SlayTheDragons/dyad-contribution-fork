@@ -36,20 +36,20 @@ describe("supabase utils", () => {
       "example",
     );
     expect(
-      getSupabaseFunctionName("supabase/functions/_shared/helpers.ts"),
+      getSupabaseFunctionName("supabase/functions/shared/helpers.ts"),
     ).toBeNull();
     expect(getSupabaseFunctionName("src/routes/api/index.ts")).toBeNull();
   });
 
   it("identifies supabase server functions", () => {
     expect(isServerFunction("supabase/functions/example/index.ts")).toBe(true);
-    expect(isServerFunction("supabase/functions/_shared/helpers.ts")).toBe(
+    expect(isServerFunction("supabase/functions/shared/helpers.ts")).toBe(
       false,
     );
   });
 
   it("detects shared module paths", () => {
-    expect(isSupabaseSharedPath("supabase/functions/_shared/index.ts")).toBe(
+    expect(isSupabaseSharedPath("supabase/functions/shared/index.ts")).toBe(
       true,
     );
     expect(
@@ -62,7 +62,7 @@ describe("supabase utils", () => {
     const functionsDir = path.join(tempDir, "supabase", "functions");
     await fs.mkdir(path.join(functionsDir, "alpha"), { recursive: true });
     await fs.mkdir(path.join(functionsDir, "beta"), { recursive: true });
-    await fs.mkdir(path.join(functionsDir, "_shared"), { recursive: true });
+    await fs.mkdir(path.join(functionsDir, "shared"), { recursive: true });
 
     const result = await listSupabaseFunctionNames(tempDir);
     expect(result).toEqual(["alpha", "beta"]);

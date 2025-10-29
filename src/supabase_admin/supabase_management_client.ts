@@ -16,7 +16,7 @@ const logger = log.scope("supabase_management_client");
 const execPromise = promisify(exec);
 
 const SUPABASE_CLI_POLL_INTERVAL_MS = 1_000;
-const SUPABASE_CLI_WAIT_TIMEOUT_MS = 5 * 60_000; // 5 minutes
+const SUPABASE_CLI_MAX_ATTEMPTS = 5;
 const SUPABASE_SERVE_RUN_DURATION_MS = 10_000;
 const SUPABASE_SERVE_FORCE_KILL_DELAY_MS = 4_000;
 
@@ -107,10 +107,9 @@ async function waitForSupabaseCli(appPath: string): Promise<SupabaseCliLocation>
     };
   }
 
-  const start = Date.now();
   let loggedWaiting = false;
 
-  while (Date.now() - start < SUPABASE_CLI_WAIT_TIMEOUT_MS) {
+  for (let attempt = 1; attempt <= SUPABASE_CLI_MAX_ATTEMPTS; attempt += 1) {
     const location = getLocalSupabaseCli(appPath) ?? (await getGlobalSupabaseCli());
     if (location) {
       logger.info(
@@ -126,11 +125,13 @@ async function waitForSupabaseCli(appPath: string): Promise<SupabaseCliLocation>
       loggedWaiting = true;
     }
 
-    await sleep(SUPABASE_CLI_POLL_INTERVAL_MS);
+    if (attempt < SUPABASE_CLI_MAX_ATTEMPTS) {
+      await sleep(SUPABASE_CLI_POLL_INTERVAL_MS);
+    }
   }
 
   throw new Error(
-    "Supabase CLI not found. Install it with `pnpm add -D supabase` or `npm install --save-dev supabase` before running Supabase functions.",
+    "Supabase CLI not found after multiple checks. Install it with `pnpm add -D supabase` or `npm install --save-dev supabase` before running Supabase functions.",
   );
 }
 

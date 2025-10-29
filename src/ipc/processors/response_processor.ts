@@ -126,6 +126,8 @@ export async function processFullResponseActions(
       return {};
     }
 
+    const wasAlreadyApproved = message.approvalState === "approved";
+
     // Handle SQL execution tags
     if (dyadExecuteSqlQueries.length > 0) {
       for (const query of dyadExecuteSqlQueries) {
@@ -369,9 +371,12 @@ export async function processFullResponseActions(
     }
 
     if (
+      !wasAlreadyApproved &&
       supabaseFunctionsToDeploy.size > 0 &&
       chatWithApp.app.supabaseProjectId
     ) {
+      // Align serving with the approval flow so we only run Supabase when the
+      // message transitions into an approved state.
       for (const functionName of supabaseFunctionsToDeploy) {
         try {
           await serveSupabaseFunction({

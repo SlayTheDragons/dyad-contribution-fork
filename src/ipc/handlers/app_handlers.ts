@@ -52,7 +52,6 @@ import {
   isSupabaseSharedPath,
   listSupabaseFunctionNames,
 } from "@/supabase_admin/supabase_utils";
-import { bundleSupabaseFunction } from "@/supabase_admin/supabase_bundler";
 import { getVercelTeamSlug } from "../utils/vercel_utils";
 import { storeDbTimestampAtCurrentVersion } from "../utils/neon_timestamp_utils";
 import { AppSearchResult } from "@/lib/schemas";
@@ -1087,15 +1086,10 @@ export function registerAppHandlers() {
 
         for (const functionName of functionNames) {
           try {
-            const bundle = await bundleSupabaseFunction({
-              appPath,
-              functionName,
-            });
-
             await deploySupabaseFunctions({
+              appPath,
               supabaseProjectId: app.supabaseProjectId,
               functionName,
-              content: bundle,
             });
           } catch (error) {
             logger.error(

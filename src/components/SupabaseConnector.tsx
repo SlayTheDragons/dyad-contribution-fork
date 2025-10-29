@@ -49,7 +49,7 @@ export function SupabaseConnector({ appId }: { appId: number }) {
   }, [app?.files]);
   const { functionFolders, sharedModuleFiles } = useMemo(() => {
     const SUPABASE_FUNCTIONS_PREFIX = "supabase/functions/";
-    const SUPABASE_SHARED_PREFIX = `${SUPABASE_FUNCTIONS_PREFIX}_shared/`;
+    const SUPABASE_SHARED_PREFIX = `${SUPABASE_FUNCTIONS_PREFIX}shared/`;
 
     const functionFolderSet = new Set<string>();
     const sharedFiles: string[] = [];
@@ -358,7 +358,7 @@ function SupabaseFunctionsOverview({
       <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
         No Supabase Edge function code yet. Create folders under
         <code className="mx-1">supabase/functions</code> or helpers inside
-        <code className="mx-1">supabase/functions/_shared</code> to get started.
+        <code className="mx-1">supabase/functions/shared</code> to get started.
       </div>
     );
   }
@@ -369,7 +369,7 @@ function SupabaseFunctionsOverview({
         <p className="text-sm font-medium">Supabase Edge function overview</p>
         <p className="text-xs text-muted-foreground">
           Files inside
-          <code className="mx-1">supabase/functions/_shared</code>
+          <code className="mx-1">supabase/functions/shared</code>
           are bundled into every deployed function, so Dyad and you can reuse
           helpers across all Edge functions.
         </p>
@@ -405,7 +405,7 @@ function SupabaseFunctionsOverview({
         ) : (
           <p className="text-xs text-muted-foreground">
             No shared helpers yet. Add files under
-            <code className="mx-1">_shared</code> to make utilities available to
+            <code className="mx-1">shared</code> to make utilities available to
             every function.
           </p>
         )}
